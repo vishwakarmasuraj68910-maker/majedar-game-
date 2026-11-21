@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cartoon Gun Arena</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Trebuchet MS", Arial, sans-serif; }
+    body {
+      background: #141726;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 12px;
+      gap: 10px;
+    }
+    .top-bar {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid rgba(255, 255, 255, 0.16);
+      border-radius: 14px;
+      padding: 10px 14px;
+    }
+    .stats { display: flex; gap: 16px; font-weight: bold; font-size: 16px; }
+    .controls-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .group-label { font-size: 12px; opacity: 0.8; margin-right: 2px; }
+    button {
+      border: 2px solid #111;
+      border-radius: 10px;
+      padding: 7px 12px;
+      font-weight: bold;
+      cursor: pointer;
+      background: #ffd166;
+      color: #111;
+      box-shadow: 0 3px 0 #111;
+      transition: transform 0.08s ease;
+    }
+    button:active { transform: translateY(2px); box-shadow: 0 1px 0 #111; }
+    button.active { background: #06d6a0; color: #091512; }
+    canvas {
+      width: 100%;
+      max-width: 900px;
+      height: auto;
+      aspect-ratio: 16 / 9;
+      border: 3px solid #111;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      cursor: crosshair;
+      background: #87ceeb;
+    }
+    .hint { font-size: 13px; opacity: 0.85; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <div class="stats">
+      <div>❤️ HP: <span id="hpText">100</span></div>
+      <div>⭐ Score: <span id="scoreText">0</span></div>
+    </div>
+
+    <div class="controls-group">
+      <span class="group-label">Gun:</span>
+      <button class="gun-btn active" data-gun="pistol">Pistol</button>
+      <button class="gun-btn" data-gun="shotgun">Shotgun</button>
+      <button class="gun-btn" data-gun="laser">Laser</button>
+    </div>
+
+    <div class="controls-group">
+      <span class="group-label">BG:</span>
+      <button class="bg-btn active" data-bg="day">Day Sky</button>
+      <button class="bg-btn" data-bg="sunset">Sunset</button>
+      <button class="bg-btn" data-bg="night">Night Neon</button>
+      <button id="musicBtn" class="active">Music: ON</button>
+      <button id="restartBtn">Restart</button>
+    </div>
+  </div>
+
+  <canvas id="gameCanvas" width="900" height="506"></canvas>
+  <div class="hint">Move: <b>A / D</b> ya <b>Left / Right Arrow</b> | Shoot: <b>Mouse Click</b> ya <b>Space</b></div>
+
+  <script>
+    // YAHAN APNI CUSTOM AUDIO FILES KE NAAM YA LINK DALEIN
+    const SOUNDS = {
+      bgMusic: "./start.mp3",  // Game start hone par bajne wala music (e.g. "start.mp3")
+      enemyHit: "./enemy.mp3", // Enemy ko goli lagne par bajne wali sound (e.g. "enemy.mp3")
+      heroHurt: "./hero.mp3"  // Hero ghayal hone par bajne wali sound (e.g. "hero.mp3")
+    };
+
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const hpText = document.getElementById("hpText");
+    const scoreText = document.getElementById("scoreText");
+    const restartBtn = document.getElementById("restartBtn");
+    const musicBtn = document.getElementById("musicBtn");
+
+    const GUNS = {
+      pistol:  { name: "Pistol",  cooldown: 240, speed: 11, damage: 25, color: "#ffbe0b", spread: 0,    pellets: 1, radius: 6 },
+      shotgun: { name: "Shotgun", cooldown: 520, speed: 10, damage: 18, color: "#fb5607", spread: 0.14, pellets: 4, radius: 5 },
+      laser:   { name: "Laser",   cooldown: 160, speed: 16, damage: 15, color: "#00f5d4", spread: 0.02, pellets: 1, radius: 5 }
+    };
+
+    const BACKGROUNDS = {
+      day:    { skyTop: "#56cfe1", skyBottom: "#caf0f8", hill1: "#52b788", hill2: "#2d6a4f", ground: "#8ac926", sunColor: "#ffd166" },
+      sunset: { skyTop: "#3a0ca3", skyBottom: "#ff7b00", hill1: "#b5179e", hill2: "#560bad", ground: "#6a2c70", sunColor: "#ffbe0b" },
+      night:  { skyTop: "#090d16", skyBottom: "#1d2d50", hill1: "#162447", hill2: "#1f4068", ground: "#1b263b", sunColor: "#e0fbfc" }
+    };
+
+    const GROUND_Y = 438;
+    let currentGun = "pistol";
+    let currentBg = "day";
+    let musicEnabled = true;
+    let bgAudioElement = null;
+    let bgSynthInterval = null;
+    let audioCtx = null;
+
+    let keys = {};
+    let bullets = [];
+    let enemies = [];
+    let pieces = [];
+    let smokePuffs = [];
+    let floatingTexts = [];
+    let lastShotTime = 0;
+    let lastEnemySpawn = 0;
+    let lastEnemyHitSound = 0;
+    let lastHeroHurtSound = 0;
+    let gameOver = false;
+
+    const hero = {
+      x: 130,
+      y: GROUND_Y - 58,
+      w: 44,
+      h: 58,
+      speed: 5.5,
+      hp: 100,
+      score: 0,
+      hurtFlash: 0,
+      aimAngle: 0
+    };
+
+    function ensureAudioContext() {
+      if (!audioCtx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) audioCtx = new AudioCtx();
+      }
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+    }
+
+    function startBackgroundMusic() {
+      if (!musicEnabled) return;
+
+      if (SOUNDS.bgMusic) {
+        if (!bgAudioElement) {
+          bgAudioElement = new Audio(SOUNDS.bgMusic);
+          bgAudioElement.loop = true;
+          bgAudioElement.volume = 0.45;
+        }
+        bgAudioElement.play().catch(() => {});
+        return;
+      }
+
+      // Backup light start beat agar custom bgMusic file na dali ho
+      ensureAudioContext();
+      if (!audioCtx || bgSynthInterval) return;
+
+      const notes = [261.63, 329.63, 392.00, 329.63];
+      let step = 0;
+
+      bgSynthInterval = setInterval(() => {
+        if (!musicEnabled || !audioCtx || audioCtx.state !== "running") return;
+        try {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = "triangle";
+          osc.frequency.setValueAtTime(notes[step % notes.length], audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.035, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.18);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.19);
+          step++;
+        } catch (e) {}
+      }, 280);
+    }
+
+    function stopBackgroundMusic() {
+      if (bgAudioElement) {
+        bgAudioElement.pause();
+      }
+      if (bgSynthInterval) {
+        clearInterval(bgSynthInterval);
+        bgSynthInterval = null;
+      }
+    }
+
+    function playCustomOrFallbackSound(type) {
+      const now = Date.now();
+      const customSrc = SOUNDS[type];
+
+      if (customSrc) {
+        const audio = new Audio(customSrc);
+        audio.play().catch(() => {});
+        return;
+      }
+
+      if (type === "enemyHit" && now - lastEnemyHitSound < 140) return;
+      if (type === "heroHurt" && now - lastHeroHurtSound < 250) return;
+
+      ensureAudioContext();
+      if (!audioCtx) return;
+
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        if (type === "enemyHit") {
+          lastEnemyHitSound = now;
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(520, audioCtx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(170, audioCtx.currentTime + 0.16);
+        } else {
+          lastHeroHurtSound = now;
+          osc.type = "square";
+          osc.frequency.setValueAtTime(220, audioCtx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(75, audioCtx.currentTime + 0.22);
+        }
+
+        gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.22);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.23);
+      } catch (e) {}
+    }
+
+    function addShout(x, y, text, color) {
+      floatingTexts.push({ x, y, text, color, life: 36 });
+    }
+
+    function spawnSmoke(x, y, count, baseRadius, vxSpread, vyBase) {
+      for (let i = 0; i < count; i++) {
+        smokePuffs.push({
+          x: x + (Math.random() - 0.5) * 18,
+          y: y + (Math.random() - 0.5) * 18,
+          vx: (Math.random() - 0.5) * vxSpread,
+          vy: vyBase - Math.random() * 1.4,
+          radius: baseRadius + Math.random() * (baseRadius * 0.7),
+          alpha: 0.72,
+          decay: 0.016 + Math.random() * 0.012
+        });
+      }
+    }
+
+    function shatterEnemy(enemy, bulletVx, bulletVy) {
+      const colors = ["#ef476f", "#ffcad4", "#ffd166", "#d90429"];
+      const totalPieces = 7;
+
+      for (let i = 0; i < totalPieces; i++) {
+        const angle = -Math.PI * 0.85 + Math.random() * Math.PI * 0.7;
+        const speed = 2.5 + Math.random() * 4.5;
+        pieces.push({
+          x: enemy.x + enemy.w / 2 + (Math.random() - 0.5) * 20,
+          y: enemy.y + enemy.h / 2 + (Math.random() - 0.5) * 24,
+          vx: Math.cos(angle) * speed + (bulletVx ? bulletVx * 0.12 : 0),
+          vy: Math.sin(angle) * speed - 2.2 + (bulletVy ? bulletVy * 0.05 : 0),
+          w: 9 + Math.random() * 8,
+          h: 8 + Math.random() * 7,
+          angle: Math.random() * Math.PI * 2,
+          spin: (Math.random() - 0.5) * 0.25,
+          color: colors[i % colors.length],
+          life: 55 + Math.floor(Math.random() * 20),
+          maxLife: 75
+        });
+      }
+
+      // Tukadon ke saath dhua ban kar gayab hone ka effect
+      spawnSmoke(enemy.x + enemy.w / 2, enemy.y + enemy.h / 2, 10, 12, 3.2, -0.9);
+    }
+
+    function shoot() {
+      if (gameOver) return;
+      startBackgroundMusic();
+
+      const now = Date.now();
+      const gun = GUNS[currentGun];
+      if (now - lastShotTime < gun.cooldown) return;
+      lastShotTime = now;
+
+      const gunOriginX = hero.x + hero.w * 0.65;
+      const gunOriginY = hero.y + hero.h * 0.48;
+
+      for (let i = 0; i < gun.pellets; i++) {
+        const offset = gun.pellets > 1
+          ? ((i / (gun.pellets - 1)) - 0.5) * gun.spread * 2
+          : (Math.random() - 0.5) * gun.spread;
+        const angle = hero.aimAngle + offset;
+
+        bullets.push({
+          x: gunOriginX,
+          y: gunOriginY,
+          vx: Math.cos(angle) * gun.speed,
+          vy: Math.sin(angle) * gun.speed,
+          damage: gun.damage,
+          color: gun.color,
+          radius: gun.radius
+        });
+      }
+    }
+
+    function spawnEnemy() {
+      enemies.push({
+        x: canvas.width + 30,
+        y: GROUND_Y - 56,
+        w: 44,
+        h: 56,
+        hp: 50,
+        speed: 1.8 + Math.random() * 1.6,
+        hitFlash: 0,
+        attackCooldown: 0
+      });
+    }
+
+    function drawBackground() {
+      const bg = BACKGROUNDS[currentBg];
+      const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      grad.addColorStop(0, bg.skyTop);
+      grad.addColorStop(1, bg.skyBottom);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.beginPath();
+      ctx.arc(760, 95, 38, 0, Math.PI * 2);
+      ctx.fillStyle = bg.sunColor;
+      ctx.fill();
+
+      ctx.fillStyle = bg.hill1;
+      ctx.beginPath();
+      ctx.arc(180, GROUND_Y + 2, 170, Math.PI, 0);
+      ctx.arc(520, GROUND_Y + 2, 210, Math.PI, 0);
+      ctx.arc(820, GROUND_Y + 2, 160, Math.PI, 0);
+      ctx.fill();
+
+      ctx.fillStyle = bg.hill2;
+      ctx.beginPath();
+      ctx.arc(330, GROUND_Y + 2, 150, Math.PI, 0);
+      ctx.arc(690, GROUND_Y + 2, 180, Math.PI, 0);
+      ctx.fill();
+
+      ctx.fillStyle = bg.ground;
+      ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, GROUND_Y);
+      ctx.lineTo(canvas.width, GROUND_Y);
+      ctx.stroke();
+    }
+
+    function drawCartoonCharacter(char, isEnemy) {
+      ctx.save();
+      const bodyColor = isEnemy
+        ? (char.hitFlash > 0 ? "#ffffff" : "#ef476f")
+        : (char.hurtFlash > 0 ? "#ff99c8" : "#3a86ff");
+
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(char.x + 8, char.y + 22, char.w - 16, char.h - 24, 8);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = isEnemy ? "#ffcad4" : "#ffd6a5";
+      ctx.beginPath();
+      ctx.arc(char.x + char.w / 2, char.y + 14, 15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#111";
+      const eyeOffsetX = isEnemy ? -4 : 5;
+      ctx.beginPath();
+      ctx.arc(char.x + char.w / 2 + eyeOffsetX, char.y + 12, 2.5, 0, Math.PI * 2);
+      ctx.arc(char.x + char.w / 2 + eyeOffsetX + 7, char.y + 12, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (!isEnemy) {
+        ctx.save();
+        ctx.translate(char.x + char.w * 0.65, char.y + char.h * 0.48);
+        ctx.rotate(char.aimAngle);
+        ctx.fillStyle = GUNS[currentGun].color;
+        ctx.fillRect(0, -4, 24, 8);
+        ctx.strokeRect(0, -4, 24, 8);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = "#111";
+        ctx.fillRect(char.x + 4, char.y - 12, char.w - 8, 6);
+        ctx.fillStyle = "#06d6a0";
+        ctx.fillRect(char.x + 5, char.y - 11, Math.max(0, ((char.w - 10) * char.hp) / 50), 4);
+      }
+
+      ctx.restore();
+    }
+
+    function update() {
+      if (!gameOver) {
+        if (keys["ArrowLeft"] || keys["KeyA"]) hero.x -= hero.speed;
+        if (keys["ArrowRight"] || keys["KeyD"]) hero.x += hero.speed;
+        hero.x = Math.max(20, Math.min(canvas.width - hero.w - 40, hero.x));
+
+        if (keys["Space"]) shoot();
+        if (hero.hurtFlash > 0) hero.hurtFlash--;
+
+        // Bullets
+        for (let i = bullets.length - 1; i >= 0; i--) {
+          const b = bullets[i];
+          b.x += b.vx;
+          b.y += b.vy;
+
+          if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
+            bullets.splice(i, 1);
+            continue;
+          }
+
+          for (let j = enemies.length - 1; j >= 0; j--) {
+            const e = enemies[j];
+            if (b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
+              e.hp -= b.damage;
+              e.hitFlash = 6;
+              bullets.splice(i, 1);
+
+              playCustomOrFallbackSound("enemyHit");
+              addShout(e.x, e.y - 18, "AAAHH! LAGI!", "#ffe66d");
+              spawnSmoke(b.x, b.y, 4, 7, 1.8, -0.6);
+
+              if (e.hp <= 0) {
+                shatterEnemy(e, b.vx, b.vy);
+                enemies.splice(j, 1);
+                hero.score += 10;
+                scoreText.textContent = hero.score;
+              }
+              break;
+            }
+          }
+        }
+
+        // Enemies
+        const now = Date.now();
+        if (now - lastEnemySpawn > 1350) {
+          lastEnemySpawn = now;
+          spawnEnemy();
+        }
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+          const e = enemies[i];
+          if (e.hitFlash > 0) e.hitFlash--;
+          if (e.attackCooldown > 0) e.attackCooldown--;
+
+          if (e.x > hero.x + hero.w - 6) {
+            e.x -= e.speed;
+          } else if (e.attackCooldown === 0) {
+            e.attackCooldown = 65;
+            hero.hp = Math.max(0, hero.hp - 12);
+            hero.hurtFlash = 10;
+            hpText.textContent = hero.hp;
+
+            playCustomOrFallbackSound("heroHurt");
+            addShout(hero.x, hero.y - 18, "OUCH! GHAYAL!", "#ff4d6d");
+
+            if (hero.hp <= 0) {
+              gameOver = true;
+            }
+          }
+        }
+      }
+
+      // Enemy tukade (chunks) update
+      for (let i = pieces.length - 1; i >= 0; i--) {
+        const p = pieces[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.26; // Gravity
+        p.angle += p.spin;
+        p.life--;
+
+        if (p.y + p.h / 2 >= GROUND_Y) {
+          p.y = GROUND_Y - p.h / 2;
+          p.vy = -Math.abs(p.vy) * 0.42;
+          p.vx *= 0.78;
+        }
+
+        // Aakhir mein dhua ban kar gayab
+        if (p.life <= 10 && Math.random() < 0.45) {
+          smokePuffs.push({
+            x: p.x,
+            y: p.y,
+            vx: (Math.random() - 0.5) * 1.4,
+            vy: -0.8 - Math.random() * 0.9,
+            radius: 8 + Math.random() * 6,
+            alpha: 0.55,
+            decay: 0.025
+          });
+        }
+
+        if (p.life <= 0) {
+          pieces.splice(i, 1);
+        }
+      }
+
+      // Dhua (smoke puffs) update
+      for (let i = smokePuffs.length - 1; i >= 0; i--) {
+        const s = smokePuffs[i];
+        s.x += s.vx;
+        s.y += s.vy;
+        s.radius += 0.35;
+        s.alpha -= s.decay;
+        if (s.alpha <= 0) {
+          smokePuffs.splice(i, 1);
+        }
+      }
+
+      // Floating shouts
+      for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        floatingTexts[i].y -= 1.2;
+        floatingTexts[i].life--;
+        if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+      }
+    }
+
+    function render() {
+      drawBackground();
+
+      for (const b of bullets) {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.fill();
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      drawCartoonCharacter(hero, false);
+      for (const e of enemies) drawCartoonCharacter(e, true);
+
+      // Draw enemy pieces
+      for (const p of pieces) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 20));
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle);
+        ctx.fillStyle = p.color;
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 2.5;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.strokeRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        ctx.restore();
+      }
+
+      // Draw smoke puffs
+      for (const s of smokePuffs) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, s.alpha);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+        ctx.fillStyle = "#e9ecef";
+        ctx.fill();
+        ctx.restore();
+      }
+
+      ctx.font = "bold 15px Arial";
+      for (const ft of floatingTexts) {
+        ctx.fillStyle = "#111";
+        ctx.fillText(ft.text, ft.x + 1, ft.y + 1);
+        ctx.fillStyle = ft.color;
+        ctx.fillText(ft.text, ft.x, ft.y);
+      }
+
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 40px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("GAME OVER!", canvas.width / 2, canvas.height / 2 - 10);
+        ctx.font = "bold 20px Arial";
+        ctx.fillText(`Final Score: ${hero.score} — Restart dabayein`, canvas.width / 2, canvas.height / 2 + 30);
+        ctx.textAlign = "left";
+      }
+    }
+
+    function loop() {
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    document.querySelectorAll(".gun-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        startBackgroundMusic();
+        document.querySelectorAll(".gun-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentGun = btn.dataset.gun;
+      });
+    });
+
+    document.querySelectorAll(".bg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        startBackgroundMusic();
+        document.querySelectorAll(".bg-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentBg = btn.dataset.bg;
+      });
+    });
+
+    musicBtn.addEventListener("click", () => {
+      musicEnabled = !musicEnabled;
+      musicBtn.textContent = musicEnabled ? "Music: ON" : "Music: OFF";
+      musicBtn.classList.toggle("active", musicEnabled);
+      if (musicEnabled) {
+        startBackgroundMusic();
+      } else {
+        stopBackgroundMusic();
+      }
+    });
+
+    restartBtn.addEventListener("click", () => {
+      startBackgroundMusic();
+      hero.x = 130;
+      hero.hp = 100;
+      hero.score = 0;
+      hero.hurtFlash = 0;
+      bullets = [];
+      enemies = [];
+      pieces = [];
+      smokePuffs = [];
+      floatingTexts = [];
+      gameOver = false;
+      hpText.textContent = hero.hp;
+      scoreText.textContent = hero.score;
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      const my = ((e.clientY - rect.top) / rect.height) * canvas.height;
+      hero.aimAngle = Math.atan2(my - (hero.y + hero.h * 0.48), mx - (hero.x + hero.w * 0.65));
+    });
+
+    canvas.addEventListener("mousedown", shoot);
+    window.addEventListener("keydown", (e) => {
+      keys[e.code] = true;
+      if (["Space", "ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(e.code)) {
+        startBackgroundMusic();
+      }
+    });
+    window.addEventListener("keyup", (e) => { keys[e.code] = false; });
+
+    loop();
+  </script>
+</body>
+</html>
